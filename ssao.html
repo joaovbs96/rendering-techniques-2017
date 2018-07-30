@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+
+<!--
+	João Vítor B. Silva
+	Orientator: Professor Helio Pedrini
+
+	==== References ====
+	Three.js Library: https://threejs.org/
+	Original Code: https://github.com/mrdoob/three.js/blob/dev/examples/webgl_postprocessing_ssao.html
+	OBJ MTL loader: https://github.com/mrdoob/three.js/blob/dev/examples/webgl_loader_obj_mtl.html
+	Trackball Controlls: https://github.com/mrdoob/three.js/blob/dev/examples/misc_controls_trackball.html
+	Stats.js monitor: https://github.com/mrdoob/stats.js/
+
+	=== Original Code References ===
+	SSAO algo: http://devlog-martinsh.blogspot.tw/2011/12/ssao-shader-update-v12.html?showComment=1398158188712#c1563204765906693531
+	log depth http://outerra.blogspot.tw/2013/07/logarithmic-depth-buffer-optimizations.html
+	convert the exponential depth to a linear value: http://www.ozone3d.net/blogs/lab/20090206/how-to-linearize-the-depth-value/
+	Spiral sampling http://web.archive.org/web/20120421191837/http://www.cgafaq.info/wiki/Evenly_distributed_points_on_sphere
+-->
+
+<html lang="en">
+	<head>
+		<title>three.js webgl - OBJLoader + MTLLoader w/ SSAO</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+		body {
+			font-family: Monospace;
+			background-color: #000;
+			color: #fff;
+			margin: 0px;
+			overflow: hidden;
+		}
+		#info {
+			color: #fff;
+			position: absolute;
+			top: 10px;
+			width: 100%;
+			text-align: center;
+			z-index: 100;
+			display:block;
+		}
+		#info a, .button {
+			color: #f00;
+			font-weight: bold;
+			text-decoration: underline;
+			cursor: pointer
+		}
+		</style>
+	</head>
+	<body>
+		<script src="scripts/three.js"></script>
+
+		<script src="scripts/EffectComposer.js"></script>
+		<script src="scripts/RenderPass.js"></script>
+		<script src="scripts/ShaderPass.js"></script>
+		<script src="scripts/SSAOPass.js"></script>
+		<script src="scripts/MaskPass.js"></script>
+
+		<script src="scripts/CopyShader.js"></script>
+		<script src="scripts/SSAOShader.js"></script>
+
+		<script src="scripts/MTLLoader.js"></script>
+		<script src="scripts/OBJLoader.js"></script>
+
+		<script src="scripts/stats.min.js"></script>
+		<script src="scripts/TrackballControls.js"></script>
+		<script src="scripts/jquery-3.3.1.min.js"></script>
+
+		<div id="info">
+	    	OBJLoader + MTLLoader w/ SSAO
+	    	</br>
+	    	MOVE mouse &amp; press LEFT/A: rotate, MIDDLE/S: zoom, RIGHT/D: pan
+		</div>
+
+		<script>
+			var toShow = true;
+			$(document).keydown(function(keyEvent) {
+					if(keyEvent.keyCode == 80){ // press p to hide hud
+							$('#info').toggle(!toShow);
+							$('#statID').toggle(!toShow);
+							toShow = !toShow;
+					} else if (keyEvent.keyCode == 88) {
+							rotateX();
+					} else if (keyEvent.keyCode == 89) {
+							rotateY();
+					} else if (keyEvent.keyCode == 90) {
+							rotateZ();
+					}
+			});
+
+			function rotateX() {
+				var object = scene.getObjectByName( "model" );
+	    	object.rotation.x -= 0.01 * 2;
+			}
+
+			function rotateY() {
+				var object = scene.getObjectByName( "model" );
+				object.rotation.y -= 0.01 * 2;
+			}
+
+			function rotateZ() {
+				var object = scene.getObjectByName( "model" );
+				object.rotation.z -= 0.01 * 2;
+			}
+
+		</script>
+
+		<script>
+
+			var container;
+			var statsFPS, statsMB, statsMS;
+			var camera, scene, renderer;
+			var effectComposer;
+			var ssaoPass;
+
+			var postprocessing = {
+				enabled: true,
+				onlyAO: true,
+				radius: 14,
+				aoClamp: 0.11,
+				lumInfluence: 0.25
+			};
+
+			init();
+			animate();
+
+			function init() {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				// === setting up renderer ===
+				renderer = new THREE.WebGLRenderer( { antialias: false } );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				document.body.appendChild( renderer.domElement );
+
+				// === setting up camera ===
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 20000 );
+
+				// configure file path and camera position
+				var sceneNum = 6;
+
+				if( sceneNum == 0 ){ // CornellBox-glossy????
+					camera.position.x = 3.5330874295061965;
+					camera.position.y = -93.15695601511106;
+					camera.position.z = -0.6224085579463883;
+
+					var filepath = 'assets/cornellbox/';
+					var filename = 'CornellBox-Glossy';
+
+				} else if ( sceneNum == 1 ) { // conference
+					camera.position.x = 2224.0145488060543;
+					camera.position.y = 498.9288807401126;
+					camera.position.z = 23.033498295266956;
+
+					var filepath = 'assets/conference/';
+					var filename = 'conference';
+
+				} else if ( sceneNum == 2 ) {	// bain
+					camera.position.x = 0.04234597428018775;
+					camera.position.y = -68.30813984470136;
+					camera.position.z = 128.58872180666788;
+
+					var filepath = 'assets/bain/';
+					var filename = 'salle_de_bain';
+
+				} else if ( sceneNum == 3 ) { // sibenik
+					camera.position.x = 19.495810050439175;
+					camera.position.y = -97.05156638002913;
+					camera.position.z = 0.916880481772738;
+
+					var filepath = 'assets/sibenik/';
+					var filename = 'sibenik';
+
+				} else if ( sceneNum == 4 ) { // breakfast
+					camera.position.x = 10.05932323708601;
+					camera.position.y = -87.14301426149541;
+					camera.position.z = 1.9613416281645955;
+
+					var filepath = 'assets/breakfast/';
+					var filename = 'breakfast_room';
+
+				} else if ( sceneNum == 5 ) { // gallery
+					camera.position.x = 1036.7216868923342;
+					camera.position.y = 647.0908619910384;
+					camera.position.z = 7.143837909657665;
+
+					var filepath = 'assets/gallery/';
+					var filename = 'gallery';
+
+				} else if ( sceneNum == 6 ) { // sponza
+					camera.position.x = 1036.7216868923342;
+					camera.position.y = 647.0908619910384;
+					camera.position.z = 7.143837909657665;
+
+					var filepath = 'assets/sponza/';
+					var filename = 'sponza';
+				}
+
+	      // === configuring trackball controls ===
+	      controls = new THREE.TrackballControls( camera );
+
+	      controls.rotateSpeed = 1.0;
+	      controls.zoomSpeed = 1.2;
+	      controls.panSpeed = 0.8;
+
+	      controls.noZoom = false;
+	      controls.noPan = false;
+
+	      controls.staticMoving = true;
+	      controls.dynamicDampingFactor = 0.3;
+
+	      controls.keys = [ 65, 83, 68 ];
+
+	    	controls.addEventListener( 'change', render );
+
+				// === setting up scene ===
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x72BEC9 );
+
+				// === adding ambient light ===
+	      var ambient = new THREE.AmbientLight( 0xa0a0a0 );
+				scene.add( ambient );
+
+	      // === adding directional light ===
+				var directionalLight = new THREE.DirectionalLight( 0xffeedd );
+				directionalLight.position.set( 0, 0, 1 ).normalize();
+				scene.add( directionalLight );
+
+				// === model loader ===
+	      // logs progress into console
+				var onProgress = function ( xhr ) {
+					if ( xhr.lengthComputable ) {
+						var percentComplete = xhr.loaded / xhr.total * 100;
+						console.log( Math.round(percentComplete, 2) + '% downloaded' );
+					}
+				};
+
+	      // logs message on error
+				var onError = function ( xhr ) {
+	      	console.log( 'An error occured while loading the OBJ file.' );
+	      };
+
+	      var mtlLoader = new THREE.MTLLoader();
+				mtlLoader.setPath( filepath );
+				mtlLoader.load( filename + '.mtl', function( materials ) {
+
+					materials.preload();
+
+					var objLoader = new THREE.OBJLoader();
+					objLoader.setMaterials( materials );
+					objLoader.setPath( filepath );
+					objLoader.load( filename + '.obj', function ( object ) {
+
+						object.position.y = - 95;
+						scene.add( object );
+
+					}, onProgress, onError );
+
+				});
+
+				// === adding stat monitors ===
+				statsDiv = document.createElement( 'div' );
+				statsDiv.id = "statID";
+
+	      // 0: fps, 1: ms, 2: mb
+		    statsFPS = new Stats();
+	      statsFPS.showPanel( 0 );
+	      statsDiv.appendChild( statsFPS.dom );
+
+	      statsMS = new Stats();
+	      statsMS.showPanel( 1 );
+	      statsMS.dom.style.marginLeft="90px"
+	      statsDiv.appendChild( statsMS.dom );
+
+	      statsMB = new Stats();
+	      statsMB.showPanel( 2 );
+	      statsMB.dom.style.marginLeft="180px"
+	      statsDiv.appendChild( statsMB.dom );
+				container.appendChild( statsDiv );
+
+				// === postprocessing ===
+				initPostprocessing();
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+				onWindowResize();
+
+			}
+
+
+			function onWindowResize() {
+
+				var width = window.innerWidth;
+				var height = window.innerHeight;
+
+				camera.aspect = width / height;
+				camera.updateProjectionMatrix();
+				renderer.setSize( width, height );
+
+				// Resize renderTargets
+				ssaoPass.setSize( width, height );
+
+				var pixelRatio = renderer.getPixelRatio();
+				var newWidth  = Math.floor( width / pixelRatio ) || 1;
+				var newHeight = Math.floor( height / pixelRatio ) || 1;
+				effectComposer.setSize( newWidth, newHeight );
+
+				controls.handleResize();
+
+			}
+
+			function initPostprocessing() {
+
+				// Setup render pass
+				var renderPass = new THREE.RenderPass( scene, camera );
+
+				// Setup SSAO pass
+				ssaoPass = new THREE.SSAOPass( scene, camera );
+				ssaoPass.renderToScreen = true;
+				ssaoPass.params = postprocessing;
+
+				// Add pass to effect composer
+				effectComposer = new THREE.EffectComposer( renderer );
+				effectComposer.addPass( renderPass );
+				effectComposer.addPass( ssaoPass );
+
+			}
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				console.log(camera.position);
+				controls.update();
+				render();
+
+			}
+
+			function render() {
+
+				var timer = performance.now();
+
+				if ( postprocessing.enabled ) {
+					effectComposer.render();
+				} else {
+					renderer.render( scene, camera );
+				}
+
+				statsFPS.update();
+				statsMS.update();
+				statsMB.update();
+
+			}
+
+		</script>
+	</body>
+</html>

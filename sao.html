@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+
+<html lang="en">
+	<head>
+		<title>three.js webgl - post processing - Scalable Ambient Occlusion (SAO)</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				background-color: #000000;
+				margin: 0px;
+				overflow: hidden;
+				font-family:Monospace;
+				font-size:13px;
+				text-align:center;
+				font-weight: bold;
+			}
+
+			a {
+				color:#00ff78;
+			}
+
+			#info {
+				color: #fff;
+				position: absolute;
+				top: 0px;
+				width: 100%;
+				padding: 5px;
+			}
+			.dg.ac {
+				z-index: 1 !important; /* FIX DAT.GUI */
+			}
+		</style>
+	</head>
+	<body>
+		<script src="scripts/three.js"></script>
+
+		<script src="scripts/EffectComposer.js"></script>
+		<script src="scripts/RenderPass.js"></script>
+		<script src="scripts/ShaderPass.js"></script>
+		<script src="scripts/SAOPass.js"></script>
+
+		<script src="scripts/CopyShader.js"></script>
+		<script src="scripts/SAOShader.js"></script>
+		<script src="scripts/DepthLimitedBlurShader.js"></script>
+		<script src="scripts/UnpackDepthRGBAShader.js"></script>
+
+		<script src="scripts/MTLLoader.js"></script>
+		<script src="scripts/OBJLoader.js"></script>
+
+		<script src="scripts/stats.min.js"></script>
+		<script src="scripts/TrackballControls.js"></script>
+		<script src="scripts/jquery-3.3.1.min.js"></script>
+		<script src='scripts/dat.gui.min.js'></script>
+
+		<div id="info">
+			<a href="http://threejs.org" target="_blank" rel="noopener noreferrer">three.js</a> - Scalable Ambient Occlusion (SAO) shader by <a href="http://clara.io">Ben Houston</a> / Post-processing pass by <a href="http://ludobaka.github.io">Ludobaka</a>
+		</div>
+
+		<script>
+			var toShow = true;
+			$(document).keydown(function(keyEvent) {
+					if(keyEvent.keyCode == 80){ // press p to hide hud
+							$('#info').toggle(!toShow);
+							$('#statID').toggle(!toShow);
+							toShow = !toShow;
+					} else if (keyEvent.keyCode == 88) {
+							rotateX();
+					} else if (keyEvent.keyCode == 89) {
+							rotateY();
+					} else if (keyEvent.keyCode == 90) {
+							rotateZ();
+					}
+			});
+
+			function rotateX() {
+				var object = scene.getObjectByName( "model" );
+	    	object.rotation.x -= 0.01 * 2;
+			}
+
+			function rotateY() {
+				var object = scene.getObjectByName( "model" );
+				object.rotation.y -= 0.01 * 2;
+			}
+
+			function rotateZ() {
+				var object = scene.getObjectByName( "model" );
+				object.rotation.z -= 0.01 * 2;
+			}
+
+		</script>
+
+		<script>
+
+			var container, stats;
+			var camera, scene, renderer;
+			var depthMaterial, saoMaterial, saoModulateMaterial, normalMaterial, vBlurMaterial, hBlurMaterial, copyMaterial;
+			var depthRenderTarget, normalRenderTarget, saoRenderTarget, beautyRenderTarget, blurIntermediateRenderTarget;
+            var composer, renderPass, saoPass, copyPass;
+			var group;
+			var params = {
+				output: 0,
+				saoBias: 0.5,
+				saoIntensity: 0.0010,
+				saoScale: 9,
+				saoKernelRadius: 10,
+				saoMinResolution: 0,
+				saoBlur: true,
+				saoBlurRadius: 3,
+				saoBlurStdDev: 0.9,
+				saoBlurDepthCutoff: 0.9
+			}
+			var supportsDepthTextureExtension = false;
+			var isWebGL2 = false;
+
+			init();
+			animate();
+
+			function init() {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				var width = window.innerWidth || 1;
+				var height = window.innerHeight || 1;
+				var devicePixelRatio = window.devicePixelRatio || 1;
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setClearColor( 0xa0a0a0 );
+				renderer.setPixelRatio( devicePixelRatio );
+				renderer.setSize( width, height );
+				document.body.appendChild( renderer.domElement );
+
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 20000 );
+
+				// configure file path and camera position
+				var sceneNum = 6;
+
+				if( sceneNum == 0 ){ // CornellBox-glossy????
+					camera.position.x = 3.5330874295061965;
+					camera.position.y = -93.15695601511106;
+					camera.position.z = -0.6224085579463883;
+
+					var filepath = 'assets/cornellbox/';
+					var filename = 'CornellBox-Glossy';
+
+				} else if ( sceneNum == 1 ) { // conference
+					camera.position.x = 2224.0145488060543;
+					camera.position.y = 498.9288807401126;
+					camera.position.z = 23.033498295266956;
+
+					var filepath = 'assets/conference/';
+					var filename = 'conference';
+
+				} else if ( sceneNum == 2 ) {	// bain
+					camera.position.x = 0.04234597428018775;
+					camera.position.y = -68.30813984470136;
+					camera.position.z = 128.58872180666788;
+
+					var filepath = 'assets/bain/';
+					var filename = 'salle_de_bain';
+
+				} else if ( sceneNum == 3 ) { // sibenik
+					camera.position.x = 19.495810050439175;
+					camera.position.y = -97.05156638002913;
+					camera.position.z = 0.916880481772738;
+
+					var filepath = 'assets/sibenik/';
+					var filename = 'sibenik';
+
+				} else if ( sceneNum == 4 ) { // breakfast
+					camera.position.x = 10.05932323708601;
+					camera.position.y = -87.14301426149541;
+					camera.position.z = 1.9613416281645955;
+
+					var filepath = 'assets/breakfast/';
+					var filename = 'breakfast_room';
+
+				} else if ( sceneNum == 5 ) { // gallery
+					camera.position.x = 12.907023698202241;
+					camera.position.y = -92.15221376638011;
+					camera.position.z = -0.3921349441040083;
+
+					var filepath = 'assets/gallery/';
+					var filename = 'gallery';
+
+				} else if ( sceneNum == 6 ) { // sponza
+					camera.position.x = 1036.7216868923342;
+					camera.position.y = 647.0908619910384;
+					camera.position.z = 7.143837909657665;
+
+					var filepath = 'assets/sponza/';
+					var filename = 'sponza';
+				}
+
+				// === configuring trackball controls ===
+			 controls = new THREE.TrackballControls( camera );
+
+			 controls.rotateSpeed = 1.0;
+			 controls.zoomSpeed = 1.2;
+			 controls.panSpeed = 0.8;
+
+			 controls.noZoom = false;
+			 controls.noPan = false;
+
+			 controls.staticMoving = true;
+			 controls.dynamicDampingFactor = 0.3;
+
+			 controls.keys = [ 65, 83, 68 ];
+
+			 controls.addEventListener( 'change', render );
+
+				scene = new THREE.Scene();
+
+				group = new THREE.Object3D();
+				scene.add( group );
+
+				// === setting up scene ===
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x72BEC9 );
+
+				// === adding ambient light ===
+	      var ambient = new THREE.AmbientLight( 0xa0a0a0 );
+				scene.add( ambient );
+
+	      // === adding directional light ===
+				var directionalLight = new THREE.DirectionalLight( 0xffeedd );
+				directionalLight.position.set( 0, 0, 1 ).normalize();
+				scene.add( directionalLight );
+
+				// === model loader ===
+				// logs progress into console
+				var onProgress = function ( xhr ) {
+					if ( xhr.lengthComputable ) {
+						var percentComplete = xhr.loaded / xhr.total * 100;
+						console.log( Math.round(percentComplete, 2) + '% downloaded' );
+					}
+				};
+
+				// logs message on error
+				var onError = function ( xhr ) {
+						console.log( 'An error occured while loading the OBJ file.' );
+				};
+
+				var mtlLoader = new THREE.MTLLoader();
+				mtlLoader.setPath( filepath );
+				mtlLoader.load( filename + '.mtl', function( materials ) {
+
+					materials.preload();
+
+					var objLoader = new THREE.OBJLoader();
+					objLoader.setMaterials( materials );
+					objLoader.setPath( filepath );
+					objLoader.load( filename + '.obj', function ( object ) {
+
+						object.position.y = - 95;
+						object.name = "model";
+						scene.add( object );
+
+					}, onProgress, onError );
+
+				});
+
+				// === adding stat monitors ===
+				statsDiv = document.createElement( 'div' );
+				statsDiv.id = "statID";
+
+				// 0: fps, 1: ms, 2: mb
+				statsFPS = new Stats();
+				statsFPS.showPanel( 0 );
+				statsDiv.appendChild( statsFPS.dom );
+
+				statsMS = new Stats();
+				statsMS.showPanel( 1 );
+				statsMS.dom.style.marginLeft="90px"
+				statsDiv.appendChild( statsMS.dom );
+
+				statsMB = new Stats();
+				statsMB.showPanel( 2 );
+				statsMB.dom.style.marginLeft="180px"
+				statsDiv.appendChild( statsMB.dom );
+				container.appendChild( statsDiv );
+
+				composer = new THREE.EffectComposer(renderer);
+				renderPass = new THREE.RenderPass(scene, camera);
+				composer.addPass(renderPass);
+
+				saoPass = new THREE.SAOPass(scene, camera, false, true);
+				saoPass.params = params;
+				saoPass.renderToScreen = true;
+				composer.addPass(saoPass);
+
+				window.addEventListener( 'resize', onWindowResize, false );
+			}
+
+			function onWindowResize() {
+
+				var width = window.innerWidth || 1;
+				var height = window.innerHeight || 1;
+				var devicePixelRatio = window.devicePixelRatio || 1;
+
+				camera.aspect = width / height;
+				camera.updateProjectionMatrix();
+				renderer.setSize( width, height );
+
+        composer.setSize( width, height );
+
+				controls.handleResize();
+
+			}
+
+			function animate() {
+      	requestAnimationFrame( animate );
+
+				console.log(camera.position);
+				controls.update();
+				render();
+			}
+
+			var prevStdDev, prevNumSamples;
+
+			function render() {
+				var timer = performance.now();
+				group.rotation.x = timer * 0.0002;
+				group.rotation.y = timer * 0.0001;
+
+				composer.render();
+
+				statsFPS.update();
+				statsMS.update();
+				statsMB.update();
+			}
+
+		</script>
+	</body>
+</html>

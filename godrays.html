@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - postprocessing - godrays</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				background-color: #000000;
+				margin: 0px;
+				overflow: hidden;
+				font-family:Monospace;
+				font-size:13px;
+				text-align:center;
+				font-weight: bold;
+				text-align:center;
+			}
+
+			a {
+				color:#0078ff;
+			}
+
+			#info {
+				color:#fff;
+				position: absolute;
+				top: 0px; width: 100%;
+				padding: 5px;
+				z-index:100;
+			}
+		</style>
+	</head>
+
+	<body>
+
+		<script src="scripts/three.js"></script>
+
+    <script src="scripts/EffectComposer.js"></script>
+    <script src="scripts/RenderPass.js"></script>
+    <script src="scripts/ShaderPass.js"></script>
+    <script src="scripts/SSAOPass.js"></script>
+    <script src="scripts/MaskPass.js"></script>
+
+    <script src="scripts/CopyShader.js"></script>
+    <script src="scripts/SSAOShader.js"></script>
+
+    <script src="scripts/MTLLoader.js"></script>
+    <script src="scripts/OBJLoader.js"></script>
+
+    <script src="scripts/stats.min.js"></script>
+    <script src="scripts/TrackballControls.js"></script>
+    <script src="scripts/jquery-3.3.1.min.js"></script>
+    <script src='scripts/dat.gui.min.js'></script>
+		<script>
+
+    THREE.VolumetericLightShader = {
+      uniforms: {
+        tDiffuse: {value:null},
+        lightPosition: {value: new THREE.Vector2(0.5, 0.5)},
+        exposure: {value: 0.18},
+        decay: {value: 0.95},
+        density: {value: 0.8},
+        weight: {value: 0.4},
+        samples: {value: 50}
+      },
+
+      vertexShader: [
+        "varying vec2 vUv;",
+        "void main() {",
+          "vUv = uv;",
+          "gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );",
+        "}"
+      ].join("\n"),
+
+      fragmentShader: [
+        "varying vec2 vUv;",
+        "uniform sampler2D tDiffuse;",
+        "uniform vec2 lightPosition;",
+        "uniform float exposure;",
+        "uniform float decay;",
+        "uniform float density;",
+        "uniform float weight;",
+        "uniform int samples;",
+        "const int MAX_SAMPLES = 100;",
+        "void main()",
+        "{",
+          "vec2 texCoord = vUv;",
+          "vec2 deltaTextCoord = texCoord - lightPosition;",
+          "deltaTextCoord *= 1.0 / float(samples) * density;",
+          "vec4 color = texture2D(tDiffuse, texCoord);",
+          "float illuminationDecay = 1.0;",
+          "for(int i=0; i < MAX_SAMPLES; i++)",
+          "{",
+            "if(i == samples){",
+              "break;",
+            "}",
+            "texCoord -= deltaTextCoord;",
+            "vec4 sample = texture2D(tDiffuse, texCoord);",
+            "sample *= illuminationDecay * weight;",
+            "color += sample;",
+            "illuminationDecay *= decay;",
+          "}",
+          "gl_FragColor = color * exposure;",
+        "}"
+      ].join("\n")
+    };
+
+    THREE.AdditiveBlendingShader = {
+      uniforms: {
+        tDiffuse: { value:null },
+        tAdd: { value:null }
+      },
+
+      vertexShader: [
+        "varying vec2 vUv;",
+        "void main() {",
+          "vUv = uv;",
+          "gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );",
+        "}"
+      ].join("\n"),
+
+      fragmentShader: [
+        "uniform sampler2D tDiffuse;",
+        "uniform sampler2D tAdd;",
+        "varying vec2 vUv;",
+        "void main() {",
+          "vec4 color = texture2D( tDiffuse, vUv );",
+          "vec4 add = texture2D( tAdd, vUv );",
+          "gl_FragColor = color + add;",
+        "}"
+      ].join("\n")
+    };
+
+    THREE.PassThroughShader = {
+    	uniforms: {
+    		tDiffuse: { value: null }
+    	},
+
+    	vertexShader: [
+    		"varying vec2 vUv;",
+        "void main() {",
+    		  "vUv = uv;",
+    			"gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );",
+    		"}"
+    	].join( "\n" ),
+
+    	fragmentShader: [
+        "uniform sampler2D tDiffuse;",
+        "varying vec2 vUv;",
+        "void main() {",
+    			"gl_FragColor = texture2D( tDiffuse, vec2( vUv.x, vUv.y ) );",
+    		"}"
+    	].join( "\n" )
+    };
+
+			var toShow = true;
+			$(document).keydown(function(keyEvent) {
+					if(keyEvent.keyCode == 80){ // press p to hide hud
+							$('#info').toggle(!toShow);
+							$('#statID').toggle(!toShow);
+							toShow = !toShow;
+					} else if (keyEvent.keyCode == 88) {
+							rotateX();
+					} else if (keyEvent.keyCode == 89) {
+							rotateY();
+					} else if (keyEvent.keyCode == 90) {
+							rotateZ();
+					}
+			});
+
+			function rotateX() {
+				var object = scene.getObjectByName( "model" );
+	    	object.rotation.x -= 0.01 * 2;
+			}
+
+			function rotateY() {
+				var object = scene.getObjectByName( "model" );
+				object.rotation.y -= 0.01 * 2;
+			}
+
+			function rotateZ() {
+				var object = scene.getObjectByName( "model" );
+				object.rotation.z -= 0.01 * 2;
+			}
+
+    (function(){
+      var scene, camera, renderer, composer, box, pointLight,
+          occlusionComposer, occlusionRenderTarget, occlusionBox, lightSphere,
+          volumetericLightShaderUniforms,
+          DEFAULT_LAYER = 0,
+          OCCLUSION_LAYER = 1,
+          renderScale = 0.5,
+          angle = 0
+					,gui = new dat.GUI();
+
+			container = document.createElement( 'div' );
+			document.body.appendChild( container );
+
+			// === setting up scene ===
+      scene = new THREE.Scene();
+			//scene.background = new THREE.Color( 0x72BEC9 );
+
+      // === setting up camera ===
+      camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 20000 );
+
+			// configure file path and camera position
+			var sceneNum = 6;
+
+			if( sceneNum == 0 ){ // CornellBox-glossy????
+				camera.position.x = 3.5330874295061965;
+				camera.position.y = -93.15695601511106;
+				camera.position.z = -0.6224085579463883;
+
+				var filepath = 'assets/cornellbox/';
+				var filename = 'CornellBox-Glossy';
+
+			} else if ( sceneNum == 1 ) { // conference
+				camera.position.x = 2224.0145488060543;
+				camera.position.y = 498.9288807401126;
+				camera.position.z = 23.033498295266956;
+
+				var filepath = 'assets/conference/';
+				var filename = 'conference';
+
+			} else if ( sceneNum == 2 ) {	// bain
+				camera.position.x = 0.04234597428018775;
+				camera.position.y = -68.30813984470136;
+				camera.position.z = 128.58872180666788;
+
+				var filepath = 'assets/bain/';
+				var filename = 'salle_de_bain';
+
+			} else if ( sceneNum == 3 ) { // sibenik
+				camera.position.x = 19.495810050439175;
+				camera.position.y = -97.05156638002913;
+				camera.position.z = 0.916880481772738;
+
+				var filepath = 'assets/sibenik/';
+				var filename = 'sibenik';
+
+			} else if ( sceneNum == 4 ) { // breakfast
+				camera.position.x = 10.05932323708601;
+				camera.position.y = -87.14301426149541;
+				camera.position.z = 1.9613416281645955;
+
+				var filepath = 'assets/breakfast/';
+				var filename = 'breakfast_room';
+
+			} else if ( sceneNum == 5 ) { // gallery
+				camera.position.x = 12.907023698202241;
+				camera.position.y = -92.15221376638011;
+				camera.position.z = -0.3921349441040083;
+
+				var filepath = 'assets/gallery/';
+				var filename = 'gallery';
+
+			} else if ( sceneNum == 6 ) { // sponza
+				camera.position.x = 1036.7216868923342;
+				camera.position.y = 647.0908619910384;
+				camera.position.z = 7.143837909657665;
+
+				var filepath = 'assets/sponza/';
+				var filename = 'sponza';
+			}
+
+      // === configuring trackball controls ===
+      controls = new THREE.TrackballControls( camera );
+
+      controls.rotateSpeed = 1.0;
+      controls.zoomSpeed = 1.2;
+      controls.panSpeed = 0.8;
+
+      controls.noZoom = false;
+      controls.noPan = false;
+
+      controls.staticMoving = true;
+      controls.dynamicDampingFactor = 0.3;
+
+      controls.keys = [ 65, 83, 68 ];
+
+      controls.addEventListener( 'change', render );
+
+      renderer = new THREE.WebGLRenderer();
+      renderer.setPixelRatio( window.devicePixelRatio );
+      renderer.setSize( window.innerWidth, window.innerHeight );
+      document.body.appendChild( renderer.domElement );
+
+      function setupScene(){
+        var ambientLight,
+            geometry,
+            material;
+
+				// === adding ambient light ===
+        ambientLight = new THREE.AmbientLight( 0xa0a0a0 );
+        scene.add(ambientLight);
+
+				// === adding point light ===
+        pointLight = new THREE.PointLight(0xffffff);
+        scene.add(pointLight);
+
+				// === adding directional light ===
+				var directionalLight = new THREE.DirectionalLight( 0xffeedd );
+				directionalLight.position.set( 0, 0, 1 ).normalize();
+				scene.add( directionalLight );
+
+        geometry = new THREE.SphereBufferGeometry( 500, 16, 16 );
+        material = new THREE.MeshBasicMaterial( { color: 0xffffff } );
+        lightSphere = new THREE.Mesh( geometry, material );
+				lightSphere.position.x = -650;
+				lightSphere.position.y = 1500;
+				lightSphere.position.z = 240;
+        lightSphere.layers.set( OCCLUSION_LAYER );
+        scene.add( lightSphere );
+
+        geometry = new THREE.BoxBufferGeometry( 1, 1, 1 );
+        material = new THREE.MeshPhongMaterial( { color: 0xe74c3c } );
+        box = new THREE.Mesh( geometry, material );
+				box.position.x = -127.66353385513241;
+				box.position.y = 2319.9285480460817;
+				box.position.z = -148.16058461880647;
+        scene.add( box );
+
+        material = new THREE.MeshBasicMaterial( { color:0x000000 } );
+        occlusionBox = new THREE.Mesh( geometry, material);
+				occlusionBox.position.x = -127.66353385513241;
+				occlusionBox.position.y = 2319.9285480460817;
+				occlusionBox.position.z = -46.16058461880647;
+        occlusionBox.layers.set( OCCLUSION_LAYER );
+        scene.add( occlusionBox );
+
+        // === model loader ===
+	      // logs progress into console
+				var onProgress = function ( xhr ) {
+					if ( xhr.lengthComputable ) {
+						var percentComplete = xhr.loaded / xhr.total * 100;
+						console.log( Math.round(percentComplete, 2) + '% downloaded' );
+					}
+				};
+
+	      // logs message on error
+				var onError = function ( xhr ) {
+	          		console.log( 'An error occured while loading the OBJ file.' );
+	        	};
+
+	      var mtlLoader = new THREE.MTLLoader();
+				mtlLoader.setPath( filepath );
+				mtlLoader.load( filename + '.mtl', function( materials ) {
+
+					materials.preload();
+
+					var objLoader = new THREE.OBJLoader();
+					objLoader.setMaterials( materials );
+					objLoader.setPath( filepath );
+					objLoader.load( filename + '.obj', function ( object ) {
+
+						object.position.y = -95;
+						scene.add( object );
+
+					}, onProgress, onError );
+
+				});
+
+      }
+
+      function setupPostprocessing(){
+        var pass;
+
+        occlusionRenderTarget = new THREE.WebGLRenderTarget( window.innerWidth * renderScale, window.innerHeight * renderScale );
+        occlusionComposer = new THREE.EffectComposer( renderer, occlusionRenderTarget);
+        occlusionComposer.addPass( new THREE.RenderPass( scene, camera ) );
+        pass = new THREE.ShaderPass( THREE.VolumetericLightShader );
+        pass.needsSwap = false;
+        occlusionComposer.addPass( pass );
+
+        volumetericLightShaderUniforms = pass.uniforms;
+
+        composer = new THREE.EffectComposer( renderer );
+        composer.addPass( new THREE.RenderPass( scene, camera ) );
+        pass = new THREE.ShaderPass( THREE.AdditiveBlendingShader );
+        pass.uniforms.tAdd.value = occlusionRenderTarget.texture;
+        composer.addPass( pass );
+        pass.renderToScreen = true;
+      }
+
+      function onFrame(){
+        requestAnimationFrame( onFrame );
+				var updateShaderLight = function(){
+						var p = lightSphere.position.clone(),
+								vector = p.project(camera),
+								x = ( vector.x + 1 ) / 2,
+								y = ( vector.y + 1 ) / 2;
+						volumetericLightShaderUniforms.lightPosition.value.set(x, y);
+						pointLight.position.copy(lightSphere.position);
+				}
+
+				updateShaderLight();
+				console.log(camera.position);
+        controls.update();
+        update();
+        render();
+
+        console.log( camera.position );
+      }
+
+      function update(){
+        var radius = 2.5,
+            xpos = Math.sin(angle) * radius,
+            zpos = Math.cos(angle) * radius;
+
+        box.position.set( xpos, 0, zpos);
+        box.rotation.x += 0.01;
+        box.rotation.y += 0.01;
+
+        occlusionBox.position.copy(box.position);
+        occlusionBox.rotation.copy(box.rotation);
+
+        angle += 0.02;
+      }
+
+      function render(){
+        camera.layers.set(OCCLUSION_LAYER);
+        renderer.setClearColor(0x000000);
+        occlusionComposer.render();
+
+        camera.layers.set(DEFAULT_LAYER);
+        renderer.setClearColor(0x090611);
+        composer.render();
+
+				statsFPS.update();
+				statsMS.update();
+				statsMB.update();
+
+      }
+
+      function setupGUI(){
+        var folder,
+            min,
+            max,
+            step,
+            updateShaderLight = function(){
+              var p = lightSphere.position.clone(),
+                  vector = p.project(camera),
+                  x = ( vector.x + 1 ) / 2,
+                  y = ( vector.y + 1 ) / 2;
+              volumetericLightShaderUniforms.lightPosition.value.set(x, y);
+              pointLight.position.copy(lightSphere.position);
+          }, obj = {
+              resetCamera: function(){
+              camera.position.x = 1036.7216868923342;
+              camera.position.z = 647.0908619910384;
+              camera.position.y = 7.143837909657665;
+            }
+          };
+
+        folder = gui.addFolder('Light Position');
+        folder.add(lightSphere.position, 'x').min(-10000).max(10000).step(10).onChange(updateShaderLight);
+        folder.add(lightSphere.position, 'y').min(-10000).max(10000).step(10).onChange(updateShaderLight);
+        folder.add(lightSphere.position, 'z').min(-10000).max(10000).step(10).onChange(updateShaderLight);
+        folder.open();
+
+        folder = gui.addFolder('Camera Position');
+        folder.add(obj, 'resetCamera');
+        folder.open();
+
+        folder = gui.addFolder('Volumeteric Light Shader');
+        Object.keys(volumetericLightShaderUniforms).forEach(function(key) {
+          if(key !==  'tDiffuse' && key != 'lightPosition' ){
+            prop = volumetericLightShaderUniforms[key];
+
+            switch ( key ) {
+              case 'exposure':
+                min = 0;
+                max = 1;
+                step = 0.01;
+                break;
+              case 'decay':
+                min = 0.8;
+                max = 1;
+                step = 0.001;
+                break;
+              case 'density':
+                min = 0;
+                max = 1;
+                step = 0.01;
+                break;
+              case 'weight':
+                min = 0;
+                max = 1;
+                step = 0.01;
+                break;
+              case 'samples':
+                min = 1;
+                max = 100;
+                step = 1.0;
+                break;
+            }
+
+            folder.add(prop, 'value').min(min).max(max).step(step).name(key);
+          }
+        });
+        folder.open();
+
+      }
+
+      function addRenderTargetImage(){
+        var material,
+            mesh,
+            folder;
+
+        material = new THREE.ShaderMaterial( THREE.PassThroughShader );
+        material.uniforms.tDiffuse.value = occlusionRenderTarget.texture;
+
+        mesh = new THREE.Mesh( new THREE.PlaneBufferGeometry( 2, 2 ), material );
+        composer.passes[1].scene.add( mesh );
+        mesh.visible = false;
+
+
+				folder = gui.addFolder('Light Pass Render Image');
+        folder.add(mesh, 'visible');
+        folder.add({scale:0.5}, 'scale', { Full: 1, Half: 0.5, Quarter: 0.25 })
+          .onChange(function(value) {
+          renderScale = value;
+          window.dispatchEvent(new Event('resize'));
+        });
+        folder.open();
+      }
+
+			// === adding stat monitors ===
+			statsDiv = document.createElement( 'div' );
+			statsDiv.id = "statID";
+
+			// 0: fps, 1: ms, 2: mb
+			statsFPS = new Stats();
+			statsFPS.showPanel( 0 );
+			statsDiv.appendChild( statsFPS.dom );
+
+			statsMS = new Stats();
+			statsMS.showPanel( 1 );
+			statsMS.dom.style.marginLeft="90px"
+			statsDiv.appendChild( statsMS.dom );
+
+			statsMB = new Stats();
+			statsMB.showPanel( 2 );
+			statsMB.dom.style.marginLeft="180px"
+			statsDiv.appendChild( statsMB.dom );
+			container.appendChild( statsDiv );
+
+      window.addEventListener( 'resize', function(){
+
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+
+        renderer.setSize( window.innerWidth, window.innerHeight );
+
+        var pixelRatio = renderer.getPixelRatio(),
+            newWidth  = Math.floor( window.innerWidth / pixelRatio ) || 1,
+            newHeight = Math.floor( window.innerHeight / pixelRatio ) || 1;
+
+        composer.setSize( newWidth, newHeight );
+        occlusionComposer.setSize( newWidth * renderScale, newHeight * renderScale );
+
+      }, false );
+
+      setupScene();
+      setupPostprocessing();
+      setupGUI();
+      addRenderTargetImage();
+      onFrame();
+    }())
+		</script>
+	</body>
+</html>

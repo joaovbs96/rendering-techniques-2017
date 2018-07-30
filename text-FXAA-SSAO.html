@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+	<title>three.js webgl - FXAA/SSAO/Shadow Mapping/Cube PBR</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<style>
+	body {
+		background-color: #000000;
+		margin: 0px;
+		overflow: hidden;
+		font-family:Monospace;
+		font-size:13px;
+		text-align:center;
+		font-weight: bold;
+	}
+
+	a {
+		color:#00ff78;
+	}
+
+	#info {
+		color: #fff;
+		position: absolute;
+		top: 0px;
+		width: 100%;
+		padding: 5px;
+	}
+	.dg.ac {
+		z-index: 1 !important; /* FIX DAT.GUI */
+	}
+	</style>
+</head>
+<body>
+	<div id="info">
+		<a href="http://threejs.org" target="_blank" rel="noopener noreferrer"> three.js </a>
+		webgl - FXAA/SSAO/Shadow Mapping/Cube PBR
+	</div>
+
+	<script src="scripts/three.js"></script>
+
+	<!-- Post Processing Passes -->
+	<script src="scripts/EffectComposer.js"></script>
+	<script src="scripts/RenderPass.js"></script>
+	<script src="scripts/ShaderPass.js"></script>
+	<script src="scripts/SAOPass.js"></script>
+	<script src="scripts/MaskPass.js"></script>
+	<script src="scripts/ClearPass.js"></script>
+	<script src="scripts/TexturePass.js"></script>
+	<script src="scripts/BokehPass.js"></script>
+
+	<script src="scripts/ShadowMapViewer.js"></script>
+
+	<script src="scripts/CopyShader.js"></script>
+	<script src="scripts/SAOShader.js"></script>
+	<script src="scripts/SSAOShader.js"></script>
+	<script src="scripts/DepthLimitedBlurShader.js"></script>
+	<script src="scripts/UnpackDepthRGBAShader.js"></script>
+	<script src="scripts/FXAAShader.js"></script>
+	<script src="scripts/HueSatShader.js"></script>
+	<script src="scripts/AdditiveShader.js"></script>
+	<script src="scripts/ShaderGodRays.js"></script>
+	<script src="scripts/BokehShader2.js"></script>
+
+	<script src="scripts/MTLLoader.js"></script>
+	<script src="scripts/OBJLoader.js"></script>
+
+	<script src="scripts/stats.min.js"></script>
+	<script src="scripts/OrbitControls.js"></script>
+	<script src="scripts/jquery-3.3.1.min.js"></script>
+	<script src="scripts/dat.gui.min.js"></script>
+	<script src="scripts/Water.js"></script>
+
+	<script src="js/ModelLoader.js"></script>
+	<script src="js/Stats.js"></script>
+	<script src="js/CameraConfig.js"></script>
+	<script src="js/LightConfig.js"></script>
+	<script src="js/WindowResize.js"></script>
+	<script src="js/KeyMapping.js"></script>
+
+	<script type="x-shader/x-vertex" id="vertexShader">
+	varying vec3 vWorldPosition;
+	void main() {
+		vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+		vWorldPosition = worldPosition.xyz;
+		gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+	}
+	</script>
+
+	<script type="x-shader/x-fragment" id="fragmentShader">
+	uniform vec3 topColor;
+	uniform vec3 bottomColor;
+	uniform float offset;
+	uniform float exponent;
+	varying vec3 vWorldPosition;
+	void main() {
+		float h = normalize( vWorldPosition + offset ).y;
+		gl_FragColor = vec4( mix( bottomColor, topColor, max( pow( max( h , 0.0), exponent ), 0.0 ) ), 1.0 );
+	}
+	</script>
+
+	<script>
+
+	var container, statsDiv;
+	var camera, scene, renderer;
+	var controls;
+	var filename, filepath;
+
+	var depthTarget, composer;
+
+	var spot1, spot2;
+
+	var cubeCamera, sphere;
+	var tree = new THREE.Object3D();
+	tree.visible = false;
+
+	var hue;
+
+	var water;
+
+	var sphereCount = 0;
+
+	var statsFPS, statsMB, statsMS;
+
+	var vertexShader = document.getElementById( 'vertexShader' ).textContent;
+	var fragmentShader = document.getElementById( 'fragmentShader' ).textContent;
+	var uniforms = {
+		topColor:    { value: new THREE.Color( 0x0077ff ) },
+		bottomColor: { value: new THREE.Color( 0xffffff ) },
+		offset:      { value: 33 },
+		exponent:    { value: 0.6 }
+	};
+
+	var toShow = true;
+
+	init();
+	animate();
+
+	function init() {
+		var sceneNumber = 6;
+
+		container = document.createElement( 'div' );
+		document.body.appendChild( container );
+
+		// Setting up camera
+		camera = new THREE.PerspectiveCamera( 45, ratio(), 1, 20000 );
+		cameraSetup( sceneNumber );
+
+		// Configuring controls
+		controls = new THREE.OrbitControls( camera );
+		controls.addEventListener( 'change', render );
+
+		// Setting up scene
+		scene = new THREE.Scene();
+		scene.background = new THREE.Color( 0x000000 );
+
+		// CubeCamera(used for reflections)
+		cubeCamera = new THREE.CubeCamera(1, 2000, 32);
+		scene.add(cubeCamera);
+
+		// Fog
+		scene.fog = new THREE.FogExp2( 0xffffff, 0.0004);
+
+		lightSetup(); // Setting up lights
+
+		loadmodels( sceneNumber, spot1 ); // Load models
+
+		renderSetup(); // Configure renderer
+
+		postprocessing(); // setting up postprocessing
+
+		stats(); // Add stats monitors
+
+		// onWindowResize event listener
+		window.addEventListener( 'resize', onWindowResize, false );
+		onWindowResize();
+
+	}
+
+	// Render init
+	function renderSetup(){
+
+		// WebGLRenderer setup
+		var parameters = {
+			minFilter: THREE.LinearFilter,
+			magFilter: THREE.LinearFilter,
+			format: THREE.RGBAFormat,
+			stencilBuffer: true,
+		};
+
+		renderer = new THREE.WebGLRenderer( { antialias: true, powerPreference: "high-performance", premultipliedAlpha: false } );
+		renderer.setPixelRatio( ratio() );
+		renderer.setSize( width(), height() );
+		renderTarget = new THREE.WebGLRenderTarget( width(), height(), parameters);
+		renderer.autoClear = false;
+		renderer.setClearColor ( 0xFFFFFF, 1.0);
+		document.body.appendChild( renderer.domElement );
+		//
+
+		// Shadow Mapping
+		renderer.shadowMap.enabled = true;
+		renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+		//
+
+	}
+
+	// Post Processing init
+	function postprocessing(){
+
+		// FXAA
+		FXAA_effect = new THREE.ShaderPass( THREE.FXAAShader );
+		FXAA_effect.uniforms[ 'resolution' ].value.set( 1 / window.innerWidth, 1 / window.innerHeight );
+		//
+
+		// HUE and Saturation
+		hue = new THREE.ShaderPass( THREE.HueSaturationShader );
+		hue.uniforms.hue.value = 0;
+		hue.uniforms.saturation.value = 0.3; // increases saturation by 30%
+		//
+
+		// SAO
+		/*saoPass = new THREE.SAOPass(scene, camera, false, true);
+		saoPass.params = {
+			output: 0,
+			saoBias: 0.5,
+			saoIntensity: 0.001,
+			saoScale: 10,
+			saoKernelRadius: 1,
+			saoMinResolution: 0,
+			saoBlur: true,
+			saoBlurRadius: 8,
+			saoBlurStdDev: 4,
+			saoBlurDepthCutoff: 0.08
+		};*/
+		//
+
+		// SSAO
+		depthTarget = new THREE.WebGLRenderTarget( window.innerWidth, window.innerHeight, {
+			minFilter: THREE.NearestFilter,
+			magFilter: THREE.NearestFilter,
+			format: THREE.RGBAFormat
+		} );
+
+		SSAO_effect = new THREE.ShaderPass( THREE.SSAOShader );
+		SSAO_effect.uniforms[ 'tDepth' ].value = depthTarget;
+		SSAO_effect.uniforms[ 'size' ].value.set( window.innerWidth, window.innerHeight );
+		SSAO_effect.uniforms[ 'cameraNear' ].value = 0.01;
+		SSAO_effect.uniforms[ 'cameraFar' ].value = 1500;
+		SSAO_effect.uniforms[ 'onlyAO' ].value = false;
+		SSAO_effect.uniforms[ 'aoClamp' ].value = 0;
+		SSAO_effect.uniforms[ 'lumInfluence' ].value = 1;
+		SSAO_effect.uniforms[ 'radius' ].value = 1;
+		//
+
+		// CopyShader
+		var effectCopy = new THREE.ShaderPass( THREE.CopyShader );
+		effectCopy.renderToScreen = true;
+		//
+
+		// Composer
+		composer = new THREE.EffectComposer( renderer );
+		composer.addPass( new THREE.RenderPass( scene, camera ) );
+
+		composer.setSize( window.innerWidth, window.innerHeight );
+		composer.addPass( FXAA_effect );
+		composer.addPass( hue );
+		//composer.addPass( saoPass );
+		composer.addPass( SSAO_effect );
+		composer.addPass( effectCopy );
+		//
+
+	}
+
+	function animate() {
+
+		requestAnimationFrame( animate );
+
+		//console.log( camera.position );
+
+		controls.update();
+
+		render();
+
+	}
+
+	function render() {
+
+		var time = performance.now() * 0.001;
+
+		// Tree Rotation
+		tree.rotation.y = time * 0.53;
+
+		// Sphere Rotation
+		sphere.position.x = 100 * Math.cos( time );
+		sphere.position.z = 125 * Math.sin( time );
+		sphere.rotation.x = time * 0.5;
+		sphere.rotation.z = time * 0.51;
+
+		// Copy sphere position
+		cubeCamera.position.copy( sphere.position );
+
+		// Updating cubeCamera is expensive.
+		// Do it every few frames.
+		sphereCount ++;
+		if( sphereCount == 15 ){
+			cubeCamera.update( renderer, scene );
+			sphereCount = 0;
+		}
+
+		// render scene
+		renderer.render( scene, camera, depthTarget, true );
+
+		// Water movement
+		water.material.uniforms.time.value += 1.0 / 60.0;
+
+		scene.overrideMaterial = null;
+
+		// Render PostProcessing composer
+		composer.render();
+
+		// Stats update
+		statsFPS.update();
+		statsMS.update();
+		statsMB.update();
+
+	}
+
+</script>
+</body>
+</html>

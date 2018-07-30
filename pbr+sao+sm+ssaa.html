@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+
+<html lang="en">
+	<head>
+		<title>three.js webgl - post processing - Scalable Ambient Occlusion (SAO) w/ Shadow Maps</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				background-color: #000000;
+				margin: 0px;
+				overflow: hidden;
+				font-family:Monospace;
+				font-size:13px;
+				text-align:center;
+				font-weight: bold;
+			}
+
+			a {
+				color:#00ff78;
+			}
+
+			#info {
+				color: #fff;
+				position: absolute;
+				top: 0px;
+				width: 100%;
+				padding: 5px;
+			}
+			.dg.ac {
+				z-index: 1 !important; /* FIX DAT.GUI */
+			}
+		</style>
+	</head>
+	<body>
+		<script src="scripts/three.js"></script>
+
+		<script src="scripts/EffectComposer.js"></script>
+		<script src="scripts/RenderPass.js"></script>
+		<script src="scripts/ShaderPass.js"></script>
+		<script src="scripts/SAOPass.js"></script>
+
+		<script src="scripts/CopyShader.js"></script>
+		<script src="scripts/SAOShader.js"></script>
+		<script src="scripts/DepthLimitedBlurShader.js"></script>
+		<script src="scripts/UnpackDepthRGBAShader.js"></script>
+		<script src="scripts/ShadowMapViewer.js"></script>
+		<script src="scripts/SSAARenderPass.js"></script>
+		<script src="scripts/MaskPass.js"></script>
+		<script src="scripts/ClearPass.js"></script>
+		<script src="scripts/AdditiveShader.js"></script>
+		<script src="scripts/TexturePass.js"></script>
+
+		<script src="scripts/MTLLoader.js"></script>
+		<script src="scripts/OBJLoader.js"></script>
+
+		<script src="scripts/stats.min.js"></script>
+		<script src="scripts/OrbitControls.js"></script>
+		<script src="scripts/jquery-3.3.1.min.js"></script>
+		<script src='scripts/dat.gui.min.js'></script>
+
+		<div id="info">
+			<a href="http://threejs.org" target="_blank" rel="noopener noreferrer"> three.js </a>
+			 - Scalable Ambient Occlusion (SAO) shader by <a href="http://clara.io">Ben Houston</a>
+			  / Post-processing pass by <a href="http://ludobaka.github.io">Ludobaka</a>
+		</div>
+
+		<script>
+			var toShow = true;
+			$( document ).keydown( function( keyEvent ) {
+					if( keyEvent.keyCode == 80 ){ // press p to hide hud
+							$( '#info' ).toggle( !toShow );
+							$( '#statID' ).toggle( !toShow );
+							toShow = !toShow;
+					}
+			});
+		</script>
+
+		<script>
+			var container, statsDiv;
+			var camera, scene, renderer;
+			var controls;
+			var filename, filepath;
+			var composer, renderPass, saoPass, ssaaRenderPass, copyPass;
+			var composerfinal, composerblend, composerSAO, composerSSAA;
+
+			// PBR cube Variable
+			var cube;
+
+			var saoParams = {
+				output: 0,
+				saoBias: 0.5,
+				saoIntensity: 0.001,
+				saoScale: 10,
+				saoKernelRadius: 10,
+				saoMinResolution: 0,
+				saoBlur: true,
+				saoBlurRadius: 1,
+				saoBlurStdDev: 0.9,
+				saoBlurDepthCutoff: 0.08
+			};
+
+			var statsFPS, statsMB, statsMS;
+
+			init();
+			animate();
+
+			function init() {
+				var sceneNumber = 6;
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 45, ratio(), 1, 20000 );
+
+				// Configure camera position
+				cameraSetup( sceneNumber );
+
+				// Configure controls
+				controlsSetup();
+
+				// setting up scene
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x000000 );
+
+				// Setting up lights
+				lightSetup();
+
+				// Load models
+				loadmodels( sceneNumber );
+
+				// Configure post-processing
+				postprocessing();
+
+				// add stats monitors and event listeners
+				stats();
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+				onWindowResize();
+
+			}
+
+			// Window functions
+			function width(){
+
+				var w = window.innerWidth || 1;
+				return w;
+
+			}
+
+			function height(){
+
+				var h = window.innerHeight || 1;
+				return h;
+
+			}
+
+			function ratio(){
+
+				var r = window.devicePixelRatio || 1;
+				return r;
+
+			}
+
+			// Setting up camera position for a given sceneNumber
+			function cameraSetup( sceneNumber ){
+
+				switch ( sceneNumber ) {
+					case 0: // CornellBox-glossy
+						camera.position.x = 3.5330874295061965;
+						camera.position.y = -93.15695601511106;
+						camera.position.z = -0.6224085579463883;
+						break;
+
+					case 1: // conference
+						camera.position.x = 2224.0145488060543;
+						camera.position.y = 498.9288807401126;
+						camera.position.z = 23.033498295266956;
+						break;
+
+					case 2: // bain
+						camera.position.x = 0.04234597428018775;
+						camera.position.y = -68.30813984470136;
+						camera.position.z = 128.58872180666788;
+						break;
+
+					case 3: // sibenik
+						camera.position.x = 19.495810050439175;
+						camera.position.y = -97.05156638002913;
+						camera.position.z = 0.916880481772738;
+						break;
+
+					case 4: // breakfast
+						camera.position.x = 10.05932323708601;
+						camera.position.y = -87.14301426149541;
+						camera.position.z = 1.9613416281645955;
+						break;
+
+					case 5: // gallery
+						camera.position.x = 12.907023698202241;
+						camera.position.y = -92.15221376638011;
+						camera.position.z = -0.3921349441040083;
+						break;
+
+					case 6: // sponza
+						camera.position.x = 1036.7216868923342;
+						camera.position.y = 647.0908619910384;
+						camera.position.z = 7.143837909657665;
+						break;
+				}
+
+			}
+
+			// Configure controls
+			function controlsSetup(){
+
+				// configuring trackball controls
+				controls = new THREE.OrbitControls( camera );
+				controls.addEventListener( 'change', render );
+
+			}
+
+			// Configure Scene lights
+			function lightSetup(){
+
+				// adding ambient light
+				var ambient = new THREE.AmbientLight( 0xfafafa, 1 );
+				scene.add( ambient );
+
+				// adding directional light
+				var direct = new THREE.SpotLight( 0xfafafa );
+				direct.position.set( -1500, 5500, 250 );
+				direct.target.position.set( 0, 0, 0 );
+				direct.castShadow = true;
+				direct.decay = 3;
+
+				direct.shadow = new THREE.LightShadow( new THREE.PerspectiveCamera( 50, 1, 1200, 2500 ) );
+				direct.shadow.bias = 0.0010;
+				direct.shadow.mapSize.width = 1024;
+				direct.shadow.mapSize.height = 1024;
+				direct.shadow.camera.near = 1000;
+				direct.shadow.camera.far = 50000;
+
+				scene.add( direct );
+
+			}
+
+			// Setting up file names and file paths
+			function filesetup( sceneNumber ){
+
+				switch ( sceneNumber ) {
+					case 0: // CornellBox-glossy
+						filepath = 'assets/cornellbox/';
+						filename = 'CornellBox-Glossy';
+						break;
+
+					case 1: // conference
+						filepath = 'assets/conference/';
+						filename = 'conference';
+						break;
+
+					case 2: // bain
+						filepath = 'assets/bain/';
+						filename = 'salle_de_bain';
+						break;
+
+					case 3: // sibenik
+						filepath = 'assets/sibenik/';
+						filename = 'sibenik';
+						break;
+
+					case 4: // breakfast
+						filepath = 'assets/breakfast/';
+						filename = 'breakfast_room';
+						break;
+
+					case 5: // gallery
+						filepath = 'assets/gallery/';
+						filename = 'gallery';
+						break;
+
+					case 6: // sponza
+						filepath = 'assets/sponza/';
+						filename = 'sponza';
+						break;
+				}
+
+			}
+
+			// Load models of a given sceneNumber
+			function loadmodels( sceneNumber ){
+
+				filesetup( sceneNumber );
+
+				// logs progress into console
+				var onProgress = function ( xhr ) {
+
+					if ( xhr.lengthComputable ) {
+						var percentComplete = xhr.loaded / xhr.total * 100;
+						console.log( Math.round(percentComplete, 2) + '% downloaded' );
+					}
+
+				};
+
+				// logs message on error
+				var onError = function ( xhr ) {
+					console.log( 'An error occured while loading the OBJ file.' );
+				};
+
+				// loader main scene model
+				// MTL material loader
+				var mtlLoader = new THREE.MTLLoader();
+				mtlLoader.setPath( filepath );
+				mtlLoader.load( filename + '.mtl', function( materials ) {
+
+					materials.preload();
+
+					// OBJ loader
+					var objLoader = new THREE.OBJLoader();
+					objLoader.setMaterials( materials );
+					objLoader.setPath( filepath );
+					objLoader.load( filename + '.obj', function ( object ) {
+
+					object.name = "model";
+					object.position.y = - 95;
+					object.traverse( function( node ) {
+
+						if ( node instanceof THREE.Mesh ) {
+							node.receiveShadow = true;
+							node.castShadow = true;
+							node.flatShading = true;
+						}
+
+					} );
+
+					scene.add( object );
+
+					}, onProgress, onError );
+
+				});
+
+				// Material PBR
+				var physicMat = new THREE.MeshPhysicalMaterial( {
+					map: null,
+					color: 0xC70000,
+					metalness: 0.1,
+					roughness: 0.3,
+					opacity: 0.70,
+					side: THREE.FrontSide,
+					//transparent: true,
+					envMapIntensity: 5,
+					premultipliedAlpha: true
+				} );
+
+				// pbr box mesh
+				cubeGeo = new THREE.BoxBufferGeometry( 100, 100, 100 );
+				cube = new THREE.Mesh( cubeGeo, physicMat );
+				scene.add( cube );
+
+			}
+
+			// Configure stat monitors
+			function stats(){
+
+				// Create div to add monitors
+				statsDiv = document.createElement( 'div' );
+				statsDiv.id = "statID";
+
+				// 0: fps
+				statsFPS = new Stats();
+				statsFPS.showPanel( 0 );
+				statsDiv.appendChild( statsFPS.dom );
+
+				// 1: ms
+				statsMS = new Stats();
+				statsMS.showPanel( 1 );
+				statsMS.dom.style.marginLeft="90px";
+				statsDiv.appendChild( statsMS.dom );
+
+				// 2: mb
+				statsMB = new Stats();
+				statsMB.showPanel( 2 );
+				statsMB.dom.style.marginLeft="180px";
+				statsDiv.appendChild( statsMB.dom );
+				container.appendChild( statsDiv );
+
+			}
+
+			// Post-processing setup
+			function postprocessing(){
+				// WebGLRenderer setup
+				var parameters = {
+						minFilter: THREE.LinearFilter,
+						magFilter: THREE.LinearFilter,
+						format: THREE.RGBAFormat,
+						stencilBuffer: true,
+				};
+
+				renderer = new THREE.WebGLRenderer( { antialias: true, powerPreference: "high-performance", premultipliedAlpha: false } );
+				renderer.setPixelRatio( ratio() );
+				renderer.setSize( width(), height() );
+				renderTarget = new THREE.WebGLRenderTarget( width(), height(), parameters);
+				renderer.autoClear = false;
+				renderer.setClearColor ( 0xFFFFFF, 1.0);
+				document.body.appendChild( renderer.domElement );
+
+				// Shadow Mapping
+				renderer.shadowMap.enabled = true;
+				renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+				// Effect Composer
+				composerfinal = new THREE.EffectComposer( renderer );
+				composerfinal.renderTarget1.stencilBuffer = true;
+				composerfinal.renderTarget2.stencilBuffer = true;
+
+				composerblend = new THREE.EffectComposer( renderer );
+				composerblend.renderTarget1.stencilBuffer = true;
+				composerblend.renderTarget2.stencilBuffer = true;
+
+				composerSAO = new THREE.EffectComposer( renderer );
+				composerSAO.renderTarget1.stencilBuffer = true;
+				composerSAO.renderTarget2.stencilBuffer = true;
+
+				composerSSAA = new THREE.EffectComposer( renderer );
+				composerSSAA.renderTarget1.stencilBuffer = true;
+				composerSSAA.renderTarget2.stencilBuffer = true;
+
+				// renderpass is aways the first pass to be added
+				renderPass = new THREE.RenderPass( scene, camera );
+				renderPass.clear = false;
+				copyPass = new THREE.ShaderPass( THREE.CopyShader );
+				copyPass.renderToScreen = true;
+
+				composerSAO.addPass( renderPass );
+				composerSAO.addPass( copyPass );
+
+				composerSSAA.addPass( renderPass );
+				composerSSAA.addPass( copyPass );
+
+				// SAO Pass
+				saoPass = new THREE.SAOPass( scene, camera, false, true );
+				saoPass.params = saoParams;
+				composerSAO.addPass( saoPass );
+
+				// base scene with no effects
+				base = new THREE.TexturePass( composerSAO.renderTarget2.texture );
+				base.renderToScreen = true;
+				composerSAO.addPass( base );
+
+				// SSAA Pass
+				ssaaRenderPass = new THREE.SSAARenderPass( scene, camera );
+				ssaaRenderPass.unbiased = true;
+				ssaaRenderPass.sampleLevel = 1;
+				composerSSAA.addPass( ssaaRenderPass );
+
+				blendingShader = new THREE.ShaderPass( THREE.Custom.AdditiveShader );
+				blendingShader.renderToScreen = false;
+				blendingShader.uniforms[ 'tBase' ].value = composerSSAA.renderTarget2.texture;
+				blendingShader.uniforms[ 'tAdd' ].value = composerSAO.renderTarget2.texture;
+				blendingShader.uniforms[ 'fCoeff' ].value = 0.1;
+				composerblend.addPass( blendingShader );
+
+				// base scene with no effects
+				copyBlend = new THREE.TexturePass( composerblend.renderTarget2.texture );
+				copyBlend.renderToScreen = true;
+				composerfinal.addPass( copyBlend );
+
+			}
+
+			// Window Resize
+			function onWindowResize() {
+
+				var w = width();
+				var h = height();
+
+				camera.aspect = w / h;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( w, h );
+				composerSSAA.setSize( w, h );
+				composerSAO.setSize( w, h );
+				composerblend.setSize( w, h );
+				composerfinal.setSize( w, h );
+
+				//controls.handleResize();
+
+			}
+
+			function animate() {
+
+				setTimeout( function() {
+					requestAnimationFrame( animate );
+				}, 1000 / 30 );
+
+				console.log( camera.position );
+
+				controls.update();
+
+				render();
+
+			}
+
+			function render() {
+
+				renderer.clear();
+
+				cube.rotation.x +=.01;
+				cube.rotation.y +=.04;
+
+				composerSSAA.render();
+				composerSAO.render();
+				composerblend.render();
+				composerfinal.render();
+
+				statsFPS.update();
+				statsMS.update();
+				statsMB.update();
+
+			}
+
+		</script>
+	</body>
+</html>

@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+	<title>three.js webgl - FXAA/SSAO/Shadow Mapping/Cube PBR</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<style>
+	body {
+		background-color: #000000;
+		margin: 0px;
+		overflow: hidden;
+		font-family:Monospace;
+		font-size:13px;
+		text-align:center;
+		font-weight: bold;
+	}
+
+	a {
+		color:#00ff78;
+	}
+
+	#info {
+		color: #fff;
+		position: absolute;
+		top: 0px;
+		width: 100%;
+		padding: 5px;
+	}
+	.dg.ac {
+		z-index: 1 !important; /* FIX DAT.GUI */
+	}
+	</style>
+</head>
+<body>
+	<script src="scripts/three.js"></script>
+
+	<script src="scripts/EffectComposer.js"></script>
+	<script src="scripts/RenderPass.js"></script>
+	<script src="scripts/ShaderPass.js"></script>
+	<script src="scripts/SAOPass.js"></script>
+
+	<script src="scripts/CopyShader.js"></script>
+	<script src="scripts/SSAOShader.js"></script>
+	<script src="scripts/DepthLimitedBlurShader.js"></script>
+	<script src="scripts/UnpackDepthRGBAShader.js"></script>
+	<script src="scripts/ShadowMapViewer.js"></script>
+	<script src="scripts/FXAAShader.js"></script>
+	<script src="scripts/MaskPass.js"></script>
+	<script src="scripts/ClearPass.js"></script>
+	<script src="scripts/AdditiveShader.js"></script>
+	<script src="scripts/TexturePass.js"></script>
+
+	<script src="scripts/MTLLoader.js"></script>
+	<script src="scripts/OBJLoader.js"></script>
+
+	<script src="scripts/stats.min.js"></script>
+	<script src="scripts/OrbitControls.js"></script>
+	<script src="scripts/jquery-3.3.1.min.js"></script>
+	<script src="scripts/dat.gui.min.js"></script>
+	<script src="scripts/Water.js"></script>
+	<script src="scripts/HueSatShader.js"></script>
+
+	<div id="info">
+		<a href="http://threejs.org" target="_blank" rel="noopener noreferrer"> three.js </a>
+		webgl - FXAA/SSAO/Shadow Mapping/Cube PBR
+	</div>
+
+	<script type="x-shader/x-vertex" id="vertexShader">
+	varying vec3 vWorldPosition;
+	void main() {
+		vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+		vWorldPosition = worldPosition.xyz;
+		gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+	}
+	</script>
+
+	<script type="x-shader/x-fragment" id="fragmentShader">
+	uniform vec3 topColor;
+	uniform vec3 bottomColor;
+	uniform float offset;
+	uniform float exponent;
+	varying vec3 vWorldPosition;
+	void main() {
+		float h = normalize( vWorldPosition + offset ).y;
+		gl_FragColor = vec4( mix( bottomColor, topColor, max( pow( max( h , 0.0), exponent ), 0.0 ) ), 1.0 );
+	}
+	</script>
+
+	<script>
+
+	var container, statsDiv;
+	var camera, scene, renderer;
+	var controls;
+	var filename, filepath;
+
+	var depthMaterial, depthTarget, composer;
+
+	var spot, direct;
+
+	var treeModel;
+
+	var hue;
+
+	var water;
+
+	var cubeCamera, cube;
+
+	var vertexShader = document.getElementById( 'vertexShader' ).textContent;
+	var fragmentShader = document.getElementById( 'fragmentShader' ).textContent;
+	var uniforms = {
+		topColor:    { value: new THREE.Color( 0x0077ff ) },
+		bottomColor: { value: new THREE.Color( 0xffffff ) },
+		offset:      { value: 33 },
+		exponent:    { value: 0.6 }
+	};
+
+	var statsFPS, statsMB, statsMS;
+
+	var toShow = true;
+	$( document ).keydown( function( event ) {
+		if( event.key == 'p' || event.key == 'P' ){
+			$( '#info' ).toggle( !toShow );
+			$( '#statID' ).toggle( !toShow );
+			toShow = !toShow;
+		} else if( event.key == 'w' || event.key == 'W' ){
+			camera.position.y += 10;
+		} else if( event.key == 'a' || event.key == 'A' ){
+			camera.position.x += 10;
+		} else if( event.key == 's' || event.key == 'S' ){
+			camera.position.y += -10;
+		} else if( event.key == 'd' || event.key == 'D' ){
+			camera.position.x += -10;
+		} else if( event.key == 'j' || event.key == 'J' ){
+			camera.translateZ(10);
+		} else if( event.key == 'm' || event.key == 'M' ){
+			camera.translateZ(-10);
+		}
+	});
+
+	init();
+	animate();
+
+	function init() {
+		var sceneNumber = 6;
+
+		container = document.createElement( 'div' );
+		document.body.appendChild( container );
+
+		// Setting up camera and controls
+		camera = new THREE.PerspectiveCamera( 45, ratio(), 1, 20000 );
+		cameraSetup( sceneNumber ); // Configure camera position
+		controlsSetup(); // Configure controls
+
+		// Setting up scene
+		scene = new THREE.Scene();
+		scene.background = new THREE.Color( 0x000000 );
+
+		cubeCamera = new THREE.CubeCamera(1, 2000, 32);
+		scene.add(cubeCamera);
+
+		scene.fog = new THREE.FogExp2( 0xffffff, 0.0004);
+
+		lightSetup(); // Setting up lights
+		loadmodels( sceneNumber ); // Load models
+
+		// Configure render and post-processing
+		renderSetup();
+		postprocessing();
+
+		// Add stats monitors and event listeners
+		stats();
+		window.addEventListener( 'resize', onWindowResize, false );
+		onWindowResize();
+
+	}
+
+	// Window functions
+	function width(){
+
+		var w = window.innerWidth || 1;
+		return w;
+
+	}
+
+	function height(){
+
+		var h = window.innerHeight || 1;
+		return h;
+
+	}
+
+	function ratio(){
+
+		var r = window.devicePixelRatio || 1;
+		return r;
+
+	}
+
+	// Setting up camera position for a given sceneNumber
+	function cameraSetup( sceneNumber ){
+
+		switch ( sceneNumber ) {
+			case 0: // CornellBox-glossy
+			camera.position.x = 3.5330874295061965;
+			camera.position.y = -93.15695601511106;
+			camera.position.z = -0.6224085579463883;
+			break;
+
+			case 1: // conference
+			camera.position.x = 2224.0145488060543;
+			camera.position.y = 498.9288807401126;
+			camera.position.z = 23.033498295266956;
+			break;
+
+			case 2: // bain
+			camera.position.x = 0.04234597428018775;
+			camera.position.y = -68.30813984470136;
+			camera.position.z = 128.58872180666788;
+			break;
+
+			case 3: // sibenik
+			camera.position.x = 19.495810050439175;
+			camera.position.y = -97.05156638002913;
+			camera.position.z = 0.916880481772738;
+			break;
+
+			case 4: // breakfast
+			camera.position.x = 10.05932323708601;
+			camera.position.y = -87.14301426149541;
+			camera.position.z = 1.9613416281645955;
+			break;
+
+			case 5: // gallery
+			camera.position.x = 12.907023698202241;
+			camera.position.y = -92.15221376638011;
+			camera.position.z = -0.3921349441040083;
+			break;
+
+			case 6: // sponza
+			camera.position.x = -1303.7648835491;
+			camera.position.y = 4.250937254369146;
+			camera.position.z = 72.03666699791765;
+			break;
+		}
+
+	}
+
+	// Configure controls
+	function controlsSetup(){
+
+		// configuring trackball controls
+		controls = new THREE.OrbitControls( camera );
+		controls.addEventListener( 'change', render );
+
+	}
+
+	// Configure Scene lights
+	function lightSetup(){
+
+		// adding ambient light
+		var ambient = new THREE.AmbientLight( 0xffffff, 0.2 );
+		scene.add( ambient );
+
+		var light = new THREE.HemisphereLight( 0xa7c8f9, 0xffffff, 1.0 );
+		uniforms.topColor.value.copy( light.color );
+		scene.add( light );
+
+		// adding spotlight
+		spot = new THREE.SpotLight( 0xffffff );
+		spot.position.set( -1500, 5000, 250 );
+		spot.target.position.set( 905,-97, -306 );
+		spot.castShadow = true;
+		spot.decay = 2;
+		spot.penumbra = 0.2;
+		spot.intensity = 1.5;
+
+		spot.shadow = new THREE.LightShadow( new THREE.PerspectiveCamera( 50, 1, 1200, 5000 ) );
+		spot.shadow.bias = 0.0020;
+		spot.shadow.mapSize.width = 4096;
+		spot.shadow.mapSize.height = 4096;
+		spot.shadow.camera.near = 2000;
+		spot.shadow.camera.far = 58000;
+
+		scene.add( spot );
+
+		// adding directional light
+		direct = new THREE.SpotLight( 0xffffff );
+		direct.position.set( 283, 2431, -485 );
+		direct.target.position.set( -1103, -68, 171 );
+		direct.castShadow = true;
+		direct.decay = 2;
+		direct.penumbra = 0.2;
+		direct.intensity = 1.5;
+
+		direct.shadow = new THREE.LightShadow( new THREE.PerspectiveCamera( 95, 1, 0, 5000 ) );
+		direct.shadow.bias = 0.0020;
+		direct.shadow.mapSize.width = 4096;
+		direct.shadow.mapSize.height = 4096;
+		direct.shadow.camera.near = 200;
+		direct.shadow.camera.far = 5800;
+
+		scene.add( direct );
+
+	}
+
+	// Setting up file names and file paths
+	function filesetup( sceneNumber ){
+
+		switch ( sceneNumber ) {
+			case 0: // CornellBox-glossy
+			filepath = 'assets/cornellbox/';
+			filename = 'CornellBox-Glossy';
+			break;
+
+			case 1: // conference
+			filepath = 'assets/conference/';
+			filename = 'conference';
+			break;
+
+			case 2: // bain
+			filepath = 'assets/bain/';
+			filename = 'salle_de_bain';
+			break;
+
+			case 3: // sibenik
+			filepath = 'assets/sibenik/';
+			filename = 'sibenik';
+			break;
+
+			case 4: // breakfast
+			filepath = 'assets/breakfast/';
+			filename = 'breakfast_room';
+			break;
+
+			case 5: // gallery
+			filepath = 'assets/gallery/';
+			filename = 'gallery';
+			break;
+
+			case 6: // sponza
+			filepath = 'assets/sponza/';
+			filename = 'sponza';
+			break;
+		}
+
+	}
+
+	// Load models of a given sceneNumber
+	function loadmodels( sceneNumber ){
+
+		// sky/background
+		var skyGeo = new THREE.SphereBufferGeometry( 4000, 32, 15 );
+		var skyMat = new THREE.ShaderMaterial( { vertexShader: vertexShader, fragmentShader: fragmentShader, uniforms: uniforms, side: THREE.BackSide } );
+		var sky = new THREE.Mesh( skyGeo, skyMat );
+		scene.add( sky );
+
+		filesetup( sceneNumber );
+
+		var waterGeometry = new THREE.PlaneBufferGeometry( 10000, 10000 );
+		water = new THREE.Water(
+			waterGeometry,
+			{
+				textureWidth: 512,
+				textureHeight: 512,
+				waterNormals: new THREE.TextureLoader().load( 'assets/water/waternormals.jpg', function ( texture ) {
+					texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+				}),
+				alpha: 1.0,
+				sunDirection: spot.position.clone().normalize(),
+				sunColor: 0xffffff,
+				waterColor: 0x001e0f,
+				distortionScale:  3.7,
+				fog: scene.fog !== undefined
+			}
+		);
+		water.rotation.x = - Math.PI / 2;
+		water.position.y = -90;
+		scene.add( water );
+
+		// logs progress into console
+		var onProgress = function ( xhr ) {
+
+			if ( xhr.lengthComputable ) {
+				var percentComplete = xhr.loaded / xhr.total * 100;
+				console.log( Math.round(percentComplete, 2) + '% downloaded' );
+			}
+
+		};
+
+		// logs message on error
+		var onError = function ( xhr ) {
+			console.log( 'An error occured while loading the OBJ file.' );
+		};
+
+		// loader main scene model
+		// MTL material loader
+		var mtlLoader = new THREE.MTLLoader();
+		mtlLoader.setPath( filepath );
+		mtlLoader.load( filename + '.mtl', function( materials ) {
+
+			materials.preload();
+
+			// OBJ loader
+			var objLoader = new THREE.OBJLoader();
+			objLoader.setMaterials( materials );
+			objLoader.setPath( filepath );
+			objLoader.load( filename + '.obj', function ( object ) {
+
+				object.name = "model";
+				object.position.y = - 95;
+				object.traverse( function( node ) {
+
+					if ( node instanceof THREE.Mesh ) {
+						node.receiveShadow = true;
+						node.castShadow = true;
+						node.flatShading = true;
+						node.shininess = 100;
+						node.reflectivity = 2;
+						node.morphTargets = true;
+						node.vertexColors = THREE.FaceColors;
+						node.specular = 0xffffff;
+					}
+
+				} );
+
+				scene.add( object );
+
+			}, onProgress, onError );
+
+		});
+
+		// Material PBR
+		var physicMat = new THREE.MeshPhysicalMaterial( {
+			map: null,
+			metalness: 0.2,
+			reflectivity: 1,
+			roughness: 0.3,
+			opacity: 1,
+			side: THREE.FrontSide,
+			//transparent: true,
+			envMapIntensity: 5,
+			premultipliedAlpha: true
+		} );
+
+		var metalPath = 'assets/';
+		var textureLoader = new THREE.TextureLoader();
+		textureLoader.setPath(metalPath);
+
+		physicMat.aoMap = textureLoader.load('thinmetal/AO.png');
+		physicMat.normalMap = textureLoader.load('thinmetal/Normal.png');
+		physicMat.roughnessMap = textureLoader.load('thinmetal/Roughness.png');
+		physicMat.map = textureLoader.load('thinmetal/Color.png');
+		physicMat.metalnessMap = textureLoader.load('thinmetal/Metallic.png');
+		physicMat.displacementMap = textureLoader.load('thinmetal/Height.png');
+		physicMat.envMap = cubeCamera.renderTarget.texture;
+
+		// pbr box mesh
+		sphereGeo = new THREE.SphereBufferGeometry( 50, 50, 50 );
+		sphere = new THREE.Mesh( sphereGeo, physicMat );
+		sphere.castShadow = true;
+		scene.add( sphere );
+
+		// MTL material loader
+		var loader = new THREE.OBJLoader();
+		loader.load( 'assets/tree.obj', function ( object ) {
+
+			object.material = new THREE.MeshPhongMaterial( );
+			object.name = "treeModel"
+			object.position.set( 0, -90, 0 );
+			object.scale.multiplyScalar( 400 );
+			object.traverse( function( node ) {
+
+				if ( node instanceof THREE.Mesh ) {
+					node.receiveShadow = true;
+					node.castShadow = true;
+					node.flatShading = true;
+					node.shininess = 30;
+					node.reflectivity = 1;
+					node.morphTargets = true;
+					node.vertexColors = THREE.FaceColors;
+					node.specular = 0xffffff;
+				}
+
+			} );
+
+		treeModel = object;
+
+
+		scene.add( object );
+
+	} );
+
+}
+
+// Configure stat monitors
+function stats(){
+
+	// Create div to add monitors
+	statsDiv = document.createElement( 'div' );
+	statsDiv.id = "statID";
+
+	// 0: fps
+	statsFPS = new Stats();
+	statsFPS.showPanel( 0 );
+	statsDiv.appendChild( statsFPS.dom );
+
+	// 1: ms
+	statsMS = new Stats();
+	statsMS.showPanel( 1 );
+	statsMS.dom.style.marginLeft="90px";
+	statsDiv.appendChild( statsMS.dom );
+
+	// 2: mb
+	statsMB = new Stats();
+	statsMB.showPanel( 2 );
+	statsMB.dom.style.marginLeft="180px";
+	statsDiv.appendChild( statsMB.dom );
+	container.appendChild( statsDiv );
+
+}
+
+// Post-processing setup
+function renderSetup(){
+	// WebGLRenderer setup
+	var parameters = {
+		minFilter: THREE.LinearFilter,
+		magFilter: THREE.LinearFilter,
+		format: THREE.RGBAFormat,
+		stencilBuffer: true,
+	};
+
+	renderer = new THREE.WebGLRenderer( { antialias: true, powerPreference: "high-performance", premultipliedAlpha: false } );
+	renderer.setPixelRatio( ratio() );
+	renderer.setSize( width(), height() );
+	renderTarget = new THREE.WebGLRenderTarget( width(), height(), parameters);
+	renderer.autoClear = false;
+	renderer.setClearColor ( 0xFFFFFF, 1.0);
+	document.body.appendChild( renderer.domElement );
+
+	// Shadow Mapping
+	renderer.shadowMap.enabled = true;
+	renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+}
+
+function postprocessing(){
+
+	// composer
+	composer = new THREE.EffectComposer( renderer );
+	composer.addPass( new THREE.RenderPass( scene, camera ) );
+	//
+
+	// FXAA
+	FXAA_effect = new THREE.ShaderPass( THREE.FXAAShader );
+	FXAA_effect.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
+	//FXAA_effect.renderToScreen = false;
+	//
+
+	depthTarget = new THREE.WebGLRenderTarget( window.innerWidth, window.innerHeight, {
+		minFilter: THREE.NearestFilter,
+		magFilter: THREE.NearestFilter,
+		format: THREE.RGBAFormat
+	} );
+
+	hue = new THREE.ShaderPass(THREE.HueSaturationShader);
+	hue.uniforms.hue.value = 0;
+	hue.uniforms.saturation.value = 0.3;
+
+	SSAO_effect = new THREE.ShaderPass( THREE.SSAOShader );
+	SSAO_effect.uniforms[ 'tDepth' ].value = depthTarget;
+	SSAO_effect.uniforms[ 'size' ].value.set( window.innerWidth, window.innerHeight );
+	SSAO_effect.uniforms[ 'cameraNear' ].value = 0.01;
+	SSAO_effect.uniforms[ 'cameraFar' ].value = 1500;
+	SSAO_effect.uniforms[ 'onlyAO' ].value = false;
+	SSAO_effect.uniforms[ 'aoClamp' ].value = 0;
+	SSAO_effect.uniforms[ 'lumInfluence' ].value = 1;
+	SSAO_effect.uniforms[ 'radius' ].value = 1;
+	//SSAO_effect.renderToScreen = true;
+
+	var renderPass = new THREE.RenderPass(scene, camera);
+	var effectCopy = new THREE.ShaderPass(THREE.CopyShader);
+	effectCopy.renderToScreen = true;
+
+	composer.setSize(window.innerWidth, window.innerHeight);
+	composer.addPass(FXAA_effect);
+	composer.addPass(hue);
+	composer.addPass(SSAO_effect);
+	composer.addPass(effectCopy);
+
+}
+
+// Window Resize
+function onWindowResize() {
+
+	var w = width();
+	var h = height();
+
+	camera.aspect = w / h;
+	camera.updateProjectionMatrix();
+
+	renderer.setSize( w, h );
+
+}
+
+function animate() {
+
+	requestAnimationFrame( animate );
+
+	console.log( camera.position );
+
+	controls.update();
+
+	render();
+
+}
+
+var sphereCount = 0;
+
+function render() {
+
+	var time = performance.now() * 0.001;
+	treeModel.rotation.y = time * 0.53;
+
+	time = performance.now() * 0.001;
+	sphere.position.x = 200 * Math.cos( time );
+	sphere.position.z = 200 * Math.sin( time );
+	sphere.rotation.x = time * 0.5;
+	sphere.rotation.z = time * 0.51;
+
+	cubeCamera.position.copy( sphere.position );
+
+	sphereCount ++;
+	if(sphereCount == 15){
+		cubeCamera.update(renderer, scene);
+		sphereCount = 0;
+	}
+
+	//treeModel.rotation.z = time * 0.53;
+
+	scene.overrideMaterial = depthMaterial;
+	renderer.render( scene, camera, depthTarget, true );
+
+	water.material.uniforms.time.value += 1.0 / 60.0;
+
+	scene.overrideMaterial = null;
+	composer.render();
+
+	statsFPS.update();
+	statsMS.update();
+	statsMB.update();
+
+}
+
+</script>
+</body>
+</html>
